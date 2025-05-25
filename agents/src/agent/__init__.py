@@ -1,0 +1,9 @@
+"""New LangGraph Agent.
+
+This module defines a custom graph.
+"""
+
+# Make the compiled graph available when importing the 'agent' package
+from .graph import companion_agent_graph
+
+__all__ = ["companion_agent_graph"]

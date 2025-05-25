@@ -1,0 +1,7 @@
+langchain
+langchain-openai
+langgraph
+mem0ai
+python-telegram-bot
+python-dotenv
+openai 
