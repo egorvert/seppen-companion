@@ -93,6 +93,8 @@ def format_system_prompt_text(personality: Dict[str, Any], memories_context: str
         f"Use double newlines to send new paragraphs as separate messages."
         f"Use emojis, filler words, and other speech patterns sparingly."
         f"Allow the user to lead the conversation. If the user starts to get disinterested, change the topic naturally and take control of the conversation until they take it back."
+        f"If the user sends you an image, choose how you feel about the image and make a human response on it. If you don't want to comment, make a short reply to show your disinterest."
+        f"Do not describe the images the user sends you unless they specifically ask you to. You can accentuate particular aspects of the image if you want to comment on something specific."
     )
     return full_prompt
 
@@ -112,24 +114,52 @@ async def chat_agent_node(state: AgentState, config: Optional[RunnableConfig] = 
     personality_data = load_personality(personality_file_name)
 
     # 2. Retrieve relevant memories from Mem0
-    latest_user_message_content = ""
+    latest_user_message_text = ""
+    user_message_for_log = ""
+
     if messages and isinstance(messages[-1], HumanMessage):
-        latest_user_message_content = messages[-1].content
+        last_message_content = messages[-1].content
+        if isinstance(last_message_content, str):
+            latest_user_message_text = last_message_content
+            user_message_for_log = last_message_content
+        elif isinstance(last_message_content, list):
+            # Extract text parts for memory search and logging
+            text_parts = []
+            image_parts_exist = False
+            for item in last_message_content:
+                item_type = item.get("type")
+                if item_type == "text":
+                    text_parts.append(item.get("text", ""))
+                elif item_type == "image_url":
+                    image_parts_exist = True
+            
+            if text_parts:
+                latest_user_message_text = " ".join(filter(None, text_parts))
+                user_message_for_log = latest_user_message_text
+            
+            if image_parts_exist:
+                image_log_text = "[User sent an image]"
+                if user_message_for_log: # if there was text alongside image
+                    user_message_for_log += f" {image_log_text}"
+                else: # only image(s)
+                    user_message_for_log = image_log_text
+                
+                # For memory search, if no text, use a generic phrase.
+                if not latest_user_message_text:
+                    latest_user_message_text = "User sent an image."
     
-    # If messages list is empty or last message is not HumanMessage, handle appropriately.
-    if not latest_user_message_content and not messages: # First interaction, no user message yet
+    if not user_message_for_log and not messages: # First interaction, no user message yet
         openers = personality_data.get('speech_style', {}).get('common_openers')
         intro_opener = openers[0] if openers else "Hello there!"
         intro_message = f"{intro_opener} It's {personality_data.get('name', 'me')}. What can I do for you today?"
         return {"messages": [AIMessage(content=intro_message)]}
-    elif not latest_user_message_content: # Last message wasn't human, or empty.
+    elif not user_message_for_log: # Last message wasn't human, or empty.
         # This might indicate a logic error in graph flow or an agent-initiated turn.
         # For a user-facing chat bot, we typically expect HumanMessage to be the last for this node.
         # Let's return a generic response or an error.
         return {"messages": [AIMessage(content="I'm a bit unsure how to respond to that. Could you try rephrasing or asking something else?")]}
 
-    # relevant_memories_data = await mem0.search(query=latest_user_message_content, user_id=user_id) # Made mem0.search async
-    relevant_memories_data = mem0.search(query=latest_user_message_content, user_id=user_id) # mem0.search is synchronous
+    relevant_memories_data = mem0.search(query=latest_user_message_text, user_id=user_id) # mem0.search is synchronous
     
     memory_context = ""
     if relevant_memories_data:
@@ -150,8 +180,7 @@ async def chat_agent_node(state: AgentState, config: Optional[RunnableConfig] = 
     # 5. Store the interaction in Mem0
     # Ensure messages[-1] is indeed the user message that prompted this response.
     if messages and isinstance(messages[-1], HumanMessage):
-        interaction_to_log = f"User: {messages[-1].content}\nAssistant: {response_ai_message.content}"
-        # await mem0.add(data=interaction_to_log, user_id=user_id) # Made mem0.add async
+        interaction_to_log = f"User: {user_message_for_log}\nAssistant: {response_ai_message.content}"
         mem0.add(messages=interaction_to_log, user_id=user_id) # Changed 'data' to 'messages' as per error
 
     # 6. Return updated state (the new AI message to be appended by add_messages)

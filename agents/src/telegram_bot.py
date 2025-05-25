@@ -186,6 +186,93 @@ async def process_user_messages(user_id: str, context: ContextTypes.DEFAULT_TYPE
              logger.info(f"Task {current_task_object.get_name()} for user {user_id} finished, but active_task was already {user_data.get('active_task').get_name() if user_data.get('active_task') else 'None'}. Not clearing.")
 
 
+async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles incoming photo messages, sends them to the agent, and replies."""
+    user = update.effective_user
+    user_id = str(user.id)
+    chat_id = update.effective_chat.id
+
+    logger.info(f"Received photo from user {user_id}. Caption: '{update.message.caption}'")
+
+    if user_id not in context.user_data: # Ensure user_data initialized
+        context.user_data[user_id] = {'buffer': [], 'active_task': None, 'placeholder_info': None}
+    
+    # Cancel any existing text processing task for this user, as photo takes precedence.
+    user_data = context.user_data[user_id]
+    active_task = user_data.get('active_task')
+    if active_task and not active_task.done():
+        try:
+            active_task.cancel()
+            logger.info(f"Cancelled text processing task {active_task.get_name()} for user {user_id} due to new photo message.")
+        except Exception as e:
+            logger.error(f"Error cancelling previous task for user {user_id}: {e}")
+        user_data['active_task'] = None # Clear it
+
+    # Delete any old text placeholder
+    old_placeholder_info = user_data.get('placeholder_info')
+    if old_placeholder_info:
+        try:
+            await context.bot.delete_message(chat_id=old_placeholder_info['chat_id'], message_id=old_placeholder_info['message_id'])
+            logger.info(f"Deleted old text placeholder message {old_placeholder_info['message_id']} for user {user_id} due to photo.")
+        except Exception as e:
+            logger.warning(f"Could not delete old text placeholder message {old_placeholder_info.get('message_id', 'N/A')} for user {user_id}: {e}")
+        user_data['placeholder_info'] = None
+
+
+    placeholder_message = await update.message.reply_text("Lena is looking at your picture...")
+
+    try:
+        photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
+        # Assuming photo_file.file_path is the full downloadable URL as per observed logs
+        image_url = photo_file.file_path 
+        
+        content_list = []
+        if update.message.caption:
+            content_list.append({"type": "text", "text": update.message.caption})
+        content_list.append({"type": "image_url", "image_url": {"url": image_url}})
+        
+        human_message_with_image = HumanMessage(content=content_list)
+        
+        logger.info(f"Constructed HumanMessage for user {user_id} with image. Content: {content_list}")
+
+        graph_config = {"configurable": {"thread_id": user_id}}
+        # Ensure messages list always starts with the current HumanMessage for the agent node
+        current_turn_input = {"messages": [human_message_with_image], "mem0_user_id": user_id}
+        
+        final_response_message = ""
+        async for event in companion_agent_graph.astream_events(current_turn_input, config=graph_config, version="v2"):
+            if event["event"] == "on_chat_model_stream":
+                chunk = event["data"].get("chunk")
+                if chunk and hasattr(chunk, 'content') and chunk.content:
+                    final_response_message += chunk.content
+        
+        if final_response_message:
+            normalized_message = final_response_message.strip().replace('\\r\\n', '\\n')
+            paragraphs = [p.strip() for p in normalized_message.split('\\n\\n') if p.strip()]
+
+            if not paragraphs:
+                await context.bot.edit_message_text(chat_id=chat_id,
+                                                    message_id=placeholder_message.message_id,
+                                                    text="I saw the picture, but I'm not sure what to say!")
+            else:
+                first_paragraph = paragraphs.pop(0)
+                await context.bot.edit_message_text(chat_id=chat_id,
+                                                    message_id=placeholder_message.message_id,
+                                                    text=first_paragraph)
+                for para_text in paragraphs:
+                    await context.bot.send_message(chat_id=chat_id, text=para_text)
+        else:
+            await context.bot.edit_message_text(chat_id=chat_id,
+                                                message_id=placeholder_message.message_id,
+                                                text="I saw your picture, but I\'m speechless right now!")
+
+    except Exception as e:
+        logger.error(f"Error processing photo for user {user_id}: {e}", exc_info=True)
+        await context.bot.edit_message_text(chat_id=chat_id,
+                                            message_id=placeholder_message.message_id,
+                                            text="I had a little trouble looking at that picture. Could you try sending it again?")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles incoming text messages, buffers them, and schedules/reschedules processing."""
     user_message_text = update.message.text
@@ -258,6 +345,7 @@ def main() -> None:
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
 
     logger.info("Telegram bot polling...")
     application.run_polling()
