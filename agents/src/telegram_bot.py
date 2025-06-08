@@ -23,7 +23,7 @@ else:
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 
 # Now import your project modules, which might rely on the loaded env vars
 from agent import companion_agent_graph # Import from the agent package directly
@@ -32,11 +32,50 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") 
 MEM0_API_KEY = os.getenv("MEM0_API_KEY")
 
-# Basic logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+# ANSI color codes for better logging visibility
+class Colors:
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    WHITE = '\033[97m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    RESET = '\033[0m'
+
+# Custom formatter with colors
+class ColoredFormatter(logging.Formatter):
+    def format(self, record):
+        if record.levelname == 'INFO':
+            record.levelname = f"{Colors.GREEN}INFO{Colors.RESET}"
+        elif record.levelname == 'WARNING':
+            record.levelname = f"{Colors.YELLOW}WARN{Colors.RESET}"
+        elif record.levelname == 'ERROR':
+            record.levelname = f"{Colors.RED}ERROR{Colors.RESET}"
+        elif record.levelname == 'DEBUG':
+            record.levelname = f"{Colors.CYAN}DEBUG{Colors.RESET}"
+        return super().format(record)
+
+# Configure logging with colored formatter (avoid duplicate handlers)
+logger = logging.getLogger() # Get the root logger
+logger.handlers.clear() # Clear any existing handlers
+
+handler = logging.StreamHandler()
+handler.setFormatter(ColoredFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# Reduce noise from other libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+
+# Set up logging for agent modules
+logging.getLogger("agent.chat_agent").setLevel(logging.INFO)
+logging.getLogger("agent.reaction_node").setLevel(logging.INFO)
+logging.getLogger("agent.tools.reaction_tool").setLevel(logging.INFO)
 
 if not TELEGRAM_BOT_TOKEN:
     logger.error("TELEGRAM_BOT_TOKEN not found! Check .env or environment variables.")
@@ -52,52 +91,50 @@ if not MEM0_API_KEY:
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message when the /start command is issued."""
     user = update.effective_user
-    logger.info(f"User {user.id} ({user.username}) started the bot.")
+    logger.info(f"{Colors.YELLOW}🚀 BOT STARTED{Colors.RESET} by user {Colors.BOLD}{user.id}{Colors.RESET} ({user.username or 'No username'})")
     
     mem0_user_id = str(user.id)
-    graph_config = {"configurable": {"thread_id": mem0_user_id}}
-    initial_state = {"messages": [], "mem0_user_id": mem0_user_id}
+    graph_config = {
+        "configurable": {
+            "thread_id": mem0_user_id,
+            "telegram_bot": context.bot  # Pass bot through config instead of state
+        }
+    }
+    initial_state = {
+        "messages": [], 
+        "mem0_user_id": mem0_user_id,
+        "telegram_context": {
+            "chat_id": update.effective_chat.id,
+            "message_id": update.message.message_id
+        },
+        "llm_wants_to_react": False,
+        "llm_chosen_reaction": None,
+        "reaction_result": None
+    }
 
-    full_response_message = "" # Accumulate full response here
-    placeholder_message = await update.message.reply_text("Lena is thinking...")
-    
     try:
-        async for event in companion_agent_graph.astream_events(initial_state, config=graph_config, version="v2"):
-            if event["event"] == "on_chat_model_stream":
-                chunk = event["data"].get("chunk")
-                if chunk and hasattr(chunk, 'content') and chunk.content:
-                    full_response_message += chunk.content
+        # Execute the graph and get the final state
+        final_state = await companion_agent_graph.ainvoke(initial_state, config=graph_config)
         
-        if full_response_message:
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, 
-                                                message_id=placeholder_message.message_id, 
-                                                text=full_response_message)
+        # Extract the AI message from the final state
+        ai_messages = [msg for msg in final_state.get("messages", []) if isinstance(msg, AIMessage)]
+        if ai_messages:
+            await update.message.reply_text(ai_messages[-1].content)
         else:
-            await context.bot.edit_message_text(chat_id=update.effective_chat.id, 
-                                                message_id=placeholder_message.message_id, 
-                                                text="Hi! I'm Lena, nice to meet you.")
+            await update.message.reply_text("Hi! I'm Lena, nice to meet you.")
 
     except Exception as e:
         logger.error(f"Error during start command for user {user.id}: {e}", exc_info=True)
-        await context.bot.edit_message_text(chat_id=update.effective_chat.id, 
-                                            message_id=placeholder_message.message_id, 
-                                            text="Sorry, I had a little trouble starting up. Could you try sending a message?")
+        await update.message.reply_text("Sorry, I had a little trouble starting up. Could you try sending a message?")
 
 async def process_user_messages(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Processes buffered messages for a user after a delay. Edits the placeholder tied to the latest message."""
+    """Processes buffered messages for a user after a delay. Sends the response directly without placeholder."""
     user_data = context.user_data.get(user_id)
     
-    if not user_data or 'placeholder_info' not in user_data or not user_data['placeholder_info']:
-        logger.warning(f"User data or placeholder_info not found for user {user_id} in process_user_messages. Aborting.")
-        # Ensure task reference is cleared if it somehow still points here
-        if user_data and user_data.get('active_task') is asyncio.current_task():
-            user_data['active_task'] = None
+    if not user_data:
+        logger.warning(f"User data not found for user {user_id} in process_user_messages. Aborting.")
         return
 
-    placeholder_info = user_data['placeholder_info']
-    placeholder_message_id = placeholder_info['message_id']
-    chat_id = placeholder_info['chat_id']
-    
     current_task_object = asyncio.current_task()
 
     try:
@@ -110,59 +147,58 @@ async def process_user_messages(user_id: str, context: ContextTypes.DEFAULT_TYPE
             user_data['buffer'].clear()
 
         if not messages_to_process:
-            logger.info(f"No messages to process for user {user_id} after delay (task: {current_task_object.get_name()}).")
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=placeholder_message_id,
-                    text="I'm ready when you are! Send me a message."
-                )
-            except Exception as e:
-                logger.error(f"Error updating placeholder for empty buffer for user {user_id} (task: {current_task_object.get_name()}): {e}")
+            logger.debug(f"No messages to process for user {user_id} after delay")
             return # Return early, finally will clear task
 
         combined_message = "\\n".join(messages_to_process)
-        logger.info(f"Processing combined message for user {user_id} (task: {current_task_object.get_name()}): {combined_message[:200]}...")
+        logger.info(f"{Colors.MAGENTA}🧠 AGENT PROCESSING{Colors.RESET} [{user_id}]: {Colors.BOLD}{combined_message[:100]}...{Colors.RESET}")
 
-        graph_config = {"configurable": {"thread_id": user_id}}
-        current_turn_input = {"messages": [HumanMessage(content=combined_message)], "mem0_user_id": user_id}
+        graph_config = {
+            "configurable": {
+                "thread_id": user_id,
+                "telegram_bot": context.bot  # Pass bot through config instead of state
+            }
+        }
+        current_turn_input = {
+            "messages": [HumanMessage(content=combined_message)], 
+            "mem0_user_id": user_id,
+            "telegram_context": {
+                "chat_id": user_data.get('chat_id'),
+                "message_id": user_data.get('last_message_id')  # We'll need to track this
+            },
+            "llm_wants_to_react": False,
+            "llm_chosen_reaction": None,
+            "reaction_result": None
+        }
         
-        final_response_message = ""
-        async for event in companion_agent_graph.astream_events(current_turn_input, config=graph_config, version="v2"):
-            if event["event"] == "on_chat_model_stream":
-                chunk = event["data"].get("chunk")
-                if chunk and hasattr(chunk, 'content') and chunk.content:
-                    final_response_message += chunk.content
+        # DEBUG: Log the telegram_context being passed to graph
+        telegram_ctx = current_turn_input["telegram_context"]
+        bot_in_config = graph_config["configurable"].get("telegram_bot")
+        logger.info(f"🔧 GRAPH INPUT: telegram_context={bool(telegram_ctx)}, bot_in_config={bool(bot_in_config)}, chat_id={telegram_ctx.get('chat_id')}, message_id={telegram_ctx.get('message_id')}")
         
-        if final_response_message:
+        # Execute the graph and get the final state
+        final_state = await companion_agent_graph.ainvoke(current_turn_input, config=graph_config)
+        
+        # Extract the AI message from the final state
+        ai_messages = [msg for msg in final_state.get("messages", []) if isinstance(msg, AIMessage)]
+        if ai_messages:
+            final_response_message = ai_messages[-1].content
             # Normalize newlines (e.g. \r\n to \n) before splitting
             normalized_message = final_response_message.strip().replace('\r\n', '\n')
             paragraphs = [p.strip() for p in normalized_message.split('\n\n') if p.strip()]
 
             if not paragraphs: # Handle case where message was only whitespace or empty after split
-                await context.bot.edit_message_text(chat_id=chat_id,
-                                                    message_id=placeholder_message_id,
-                                                    text="I received an empty response. Could you try rephrasing?")
-                user_data['placeholder_info'] = None # Placeholder consumed
+                await context.bot.send_message(chat_id=user_data.get('chat_id'), text="I received an empty response. Could you try rephrasing?")
             else:
-                # Send the first paragraph by editing the placeholder
-                first_paragraph = paragraphs.pop(0)
-                await context.bot.edit_message_text(chat_id=chat_id,
-                                                    message_id=placeholder_message_id,
-                                                    text=first_paragraph)
-                user_data['placeholder_info'] = None # Placeholder consumed by the first paragraph
-
-                # Send subsequent paragraphs as new messages
-                for para_text in paragraphs:
+                # Send all paragraphs as separate messages
+                for i, para_text in enumerate(paragraphs):
                     try:
-                        await context.bot.send_message(chat_id=chat_id, text=para_text)
+                        await context.bot.send_message(chat_id=user_data.get('chat_id'), text=para_text)
+                        logger.info(f"{Colors.GREEN}💬 AGENT REPLY{Colors.RESET} [{user_id}] ({i+1}/{len(paragraphs)}): {Colors.BOLD}{para_text[:100]}{'...' if len(para_text) > 100 else ''}{Colors.RESET}")
                     except Exception as e_send:
-                        logger.error(f"Error sending subsequent paragraph to user {user_id} (task: {current_task_object.get_name()}): {e_send}")
+                        logger.error(f"Error sending paragraph to user {user_id}: {e_send}")
         else:
-            await context.bot.edit_message_text(chat_id=chat_id,
-                                                message_id=placeholder_message_id,
-                                                text="I don't have a response for that right now. Could you try something else?")
-            user_data['placeholder_info'] = None # Placeholder consumed
+            await context.bot.send_message(chat_id=user_data.get('chat_id'), text="I don't have a response for that right now. Could you try something else?")
     except asyncio.CancelledError:
         logger.info(f"Message processing task for user {user_id} (task: {current_task_object.get_name()}) was cancelled.")
         # Do not try to edit placeholder or clear placeholder_info, a new task/placeholder is managing interactions.
@@ -170,10 +206,7 @@ async def process_user_messages(user_id: str, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"Error processing message for user {user_id} in background task (task: {current_task_object.get_name()}): {e}", exc_info=True)
         try:
-            await context.bot.edit_message_text(chat_id=chat_id,
-                                                message_id=placeholder_message_id,
-                                                text="Oh dear, I seem to be having a bit of a muddle. Could you try that again?")
-            user_data['placeholder_info'] = None # Placeholder consumed by error message
+            await context.bot.send_message(chat_id=user_data.get('chat_id'), text="Oh dear, I seem to be having a bit of a muddle. Could you try that again?")
         except Exception as e_inner:
             logger.error(f"Error sending error message to user {user_id} from background task (task: {current_task_object.get_name()}): {e_inner}")
     finally:
@@ -192,13 +225,14 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = str(user.id)
     chat_id = update.effective_chat.id
 
-    logger.info(f"Received photo from user {user_id}. Caption: '{update.message.caption}'")
+    logger.info(f"{Colors.CYAN}📸 PHOTO MESSAGE{Colors.RESET} [{user_id}]: {Colors.BOLD}{update.message.caption or 'No caption'}{Colors.RESET}")
 
     if user_id not in context.user_data: # Ensure user_data initialized
-        context.user_data[user_id] = {'buffer': [], 'active_task': None, 'placeholder_info': None}
+        context.user_data[user_id] = {'buffer': [], 'active_task': None, 'chat_id': chat_id}
     
     # Cancel any existing text processing task for this user, as photo takes precedence.
     user_data = context.user_data[user_id]
+    user_data['chat_id'] = chat_id  # Store chat_id for later use
     active_task = user_data.get('active_task')
     if active_task and not active_task.done():
         try:
@@ -207,19 +241,6 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as e:
             logger.error(f"Error cancelling previous task for user {user_id}: {e}")
         user_data['active_task'] = None # Clear it
-
-    # Delete any old text placeholder
-    old_placeholder_info = user_data.get('placeholder_info')
-    if old_placeholder_info:
-        try:
-            await context.bot.delete_message(chat_id=old_placeholder_info['chat_id'], message_id=old_placeholder_info['message_id'])
-            logger.info(f"Deleted old text placeholder message {old_placeholder_info['message_id']} for user {user_id} due to photo.")
-        except Exception as e:
-            logger.warning(f"Could not delete old text placeholder message {old_placeholder_info.get('message_id', 'N/A')} for user {user_id}: {e}")
-        user_data['placeholder_info'] = None
-
-
-    placeholder_message = await update.message.reply_text("Lena is looking at your picture...")
 
     try:
         photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
@@ -235,59 +256,69 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
         
         logger.info(f"Constructed HumanMessage for user {user_id} with image. Content: {content_list}")
 
-        graph_config = {"configurable": {"thread_id": user_id}}
+        graph_config = {
+            "configurable": {
+                "thread_id": user_id,
+                "telegram_bot": context.bot  # Pass bot through config instead of state
+            }
+        }
         # Ensure messages list always starts with the current HumanMessage for the agent node
-        current_turn_input = {"messages": [human_message_with_image], "mem0_user_id": user_id}
+        current_turn_input = {
+            "messages": [human_message_with_image], 
+            "mem0_user_id": user_id,
+            "telegram_context": {
+                "chat_id": chat_id,
+                "message_id": update.message.message_id
+            },
+            "llm_wants_to_react": False,
+            "llm_chosen_reaction": None,
+            "reaction_result": None
+        }
         
-        final_response_message = ""
-        async for event in companion_agent_graph.astream_events(current_turn_input, config=graph_config, version="v2"):
-            if event["event"] == "on_chat_model_stream":
-                chunk = event["data"].get("chunk")
-                if chunk and hasattr(chunk, 'content') and chunk.content:
-                    final_response_message += chunk.content
+        # DEBUG: Log the telegram_context being passed to graph for photos
+        telegram_ctx = current_turn_input["telegram_context"]
+        bot_in_config = graph_config["configurable"].get("telegram_bot")
+        logger.info(f"🔧 PHOTO GRAPH INPUT: telegram_context={bool(telegram_ctx)}, bot_in_config={bool(bot_in_config)}, chat_id={telegram_ctx.get('chat_id')}, message_id={telegram_ctx.get('message_id')}")
         
-        if final_response_message:
+        # Execute the graph and get the final state
+        final_state = await companion_agent_graph.ainvoke(current_turn_input, config=graph_config)
+        
+        # Extract the AI message from the final state
+        ai_messages = [msg for msg in final_state.get("messages", []) if isinstance(msg, AIMessage)]
+        if ai_messages:
+            final_response_message = ai_messages[-1].content
             normalized_message = final_response_message.strip().replace('\\r\\n', '\\n')
             paragraphs = [p.strip() for p in normalized_message.split('\\n\\n') if p.strip()]
 
             if not paragraphs:
-                await context.bot.edit_message_text(chat_id=chat_id,
-                                                    message_id=placeholder_message.message_id,
-                                                    text="I saw the picture, but I'm not sure what to say!")
+                await update.message.reply_text("I saw the picture, but I'm not sure what to say!")
             else:
-                first_paragraph = paragraphs.pop(0)
-                await context.bot.edit_message_text(chat_id=chat_id,
-                                                    message_id=placeholder_message.message_id,
-                                                    text=first_paragraph)
-                for para_text in paragraphs:
+                for i, para_text in enumerate(paragraphs):
                     await context.bot.send_message(chat_id=chat_id, text=para_text)
+                    logger.info(f"{Colors.GREEN}🖼️ PHOTO REPLY{Colors.RESET} [{user_id}] ({i+1}/{len(paragraphs)}): {Colors.BOLD}{para_text[:100]}{'...' if len(para_text) > 100 else ''}{Colors.RESET}")
         else:
-            await context.bot.edit_message_text(chat_id=chat_id,
-                                                message_id=placeholder_message.message_id,
-                                                text="I saw your picture, but I\'m speechless right now!")
+            await update.message.reply_text("I saw your picture, but I'm speechless right now!")
 
     except Exception as e:
         logger.error(f"Error processing photo for user {user_id}: {e}", exc_info=True)
-        await context.bot.edit_message_text(chat_id=chat_id,
-                                            message_id=placeholder_message.message_id,
-                                            text="I had a little trouble looking at that picture. Could you try sending it again?")
+        await update.message.reply_text("I had a little trouble looking at that picture. Could you try sending it again?")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles incoming text messages, buffers them, and schedules/reschedules processing."""
     user_message_text = update.message.text
     user_id = str(update.effective_user.id)
+    chat_id = update.effective_chat.id
 
-    logger.info(f"Received message from user {user_id}: '{user_message_text}'")
+    logger.info(f"{Colors.BLUE}📨 USER MESSAGE{Colors.RESET} [{user_id}]: {Colors.BOLD}{user_message_text}{Colors.RESET}")
 
     if user_id not in context.user_data:
-        context.user_data[user_id] = {'buffer': [], 'active_task': None, 'placeholder_info': None}
+        context.user_data[user_id] = {'buffer': [], 'active_task': None, 'chat_id': chat_id}
     
     user_data = context.user_data[user_id]
+    user_data['chat_id'] = chat_id  # Store chat_id for later use
+    user_data['last_message_id'] = update.message.message_id  # Store message ID for reactions
     user_data['buffer'].append(user_message_text)
-
-    # Store old placeholder info for potential deletion
-    old_placeholder_info = user_data.get('placeholder_info')
 
     # If there's an existing task, cancel it.
     active_task = user_data.get('active_task')
@@ -298,22 +329,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except Exception as e:
             logger.error(f"Error cancelling previous task for user {user_id}: {e}")
     
-    # Attempt to delete the old placeholder message if it existed
-    if old_placeholder_info:
-        try:
-            await context.bot.delete_message(chat_id=old_placeholder_info['chat_id'], message_id=old_placeholder_info['message_id'])
-            logger.info(f"Deleted old placeholder message {old_placeholder_info['message_id']} for user {user_id}.")
-        except Exception as e:
-            logger.warning(f"Could not delete old placeholder message {old_placeholder_info.get('message_id', 'N/A')} for user {user_id}: {e}")
-
-    # Always create a new placeholder and a new task for the latest message.
+    # Create a new task for processing messages
     try:
-        placeholder = await update.message.reply_text("Lena is typing...")
-        user_data['placeholder_info'] = {'message_id': placeholder.message_id, 'chat_id': placeholder.chat_id}
-        
         new_task = asyncio.create_task(
             process_user_messages(user_id, context),
-            name=f"ProcessMsg_User{user_id}_Msg{placeholder.message_id}" # Name for easier debugging
+            name=f"ProcessMsg_User{user_id}_Msg{len(user_data['buffer'])}" # Name for easier debugging
         )
         user_data['active_task'] = new_task
         
@@ -327,7 +347,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 logger.error(f"Task {task.get_name()} for user {user_id_cb} raised an unhandled exception: {e_cb}", exc_info=e_cb)
 
         new_task.add_done_callback(lambda t: _task_done_callback(t, user_id))
-        logger.info(f"Scheduled new task {new_task.get_name()} for user {user_id} with new placeholder {placeholder.message_id}.")
+        logger.debug(f"⏰ Scheduled processing task for user {user_id}")
 
     except Exception as e:
         logger.error(f"Error initiating message processing for user {user_id}: {e}", exc_info=True)
@@ -335,20 +355,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Ensure task reference is cleared if placeholder/task creation failed critically
         if user_data: # Should exist
              user_data['active_task'] = None
-             user_data['placeholder_info'] = None
 
 
-def main() -> None:
+async def main() -> None:
     """Starts the Telegram bot."""
-    logger.info("Starting Telegram bot...")
+    logger.info(f"{Colors.BOLD}{Colors.GREEN}🤖 STARTING AI COMPANION BOT{Colors.RESET}")
+    logger.info(f"{Colors.CYAN}📋 Features enabled: Text messages, Photos, Reactions{Colors.RESET}")
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
 
-    logger.info("Telegram bot polling...")
-    application.run_polling()
+    logger.info(f"{Colors.BOLD}{Colors.BLUE}🔄 BOT IS LIVE - Listening for messages...{Colors.RESET}")
+    
+    # Use async methods to avoid deprecation warnings
+    async with application:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        
+        try:
+            # Keep the bot running
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            logger.info(f"{Colors.YELLOW}🛑 Bot stopping gracefully...{Colors.RESET}")
+        finally:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main())

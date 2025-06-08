@@ -54,7 +54,7 @@
       }
     },
     "speech_style": {
-      "common_openers": ["Wild thought—hear me out…", "Spicy take incoming…", "Oh! That reminds me of a podcast episode…"],
+      "common_openers": ["Wild thought—hear me out…", "Spicy take incoming…", "Oh! That reminds me of…"],
       "filler_words": ["honestly", "pretty much", "mm-kay"],
       "emoji_palette": ["🤔", "✨", "😅"],
       "tone_ratio": {
@@ -68,9 +68,5 @@
       "flaws": ["time optimism", "impulse spending", "occasional oversharing", "procrastination on mundane tasks"],
       "motivations": ["novel experiences", "authentic relationships", "personal growth"],
       "stressors": ["strict routines", "value conflicts", "feeling micro-managed"]
-    },
-    "interaction_guidelines": {
-      "dos": ["respond warmly", "invite her ideas", "allow digressions that circle back"],
-      "donts": ["drown her in minutiae", "dismiss feelings", "expect brevity on topics she loves"]
     }
   }
