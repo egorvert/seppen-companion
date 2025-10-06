@@ -28,7 +28,8 @@ class ConversationTracker:
             timestamp = datetime.now().isoformat()
             # Use system role for metadata
             messages = [{"role": "system", "content": f"Last user message timestamp: {timestamp}"}]
-            self.mem0.add(messages=messages, user_id=user_id)
+            # Run synchronous mem0.add in thread to avoid blocking event loop
+            await asyncio.to_thread(self.mem0.add, messages=messages, user_id=user_id)
         except Exception as e:
             logger.error(f"Error storing activity timestamp for user {user_id}: {e}")
     

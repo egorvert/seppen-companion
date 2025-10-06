@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import random # Added for random delay
+from datetime import datetime
 from dotenv import load_dotenv
 
 # --- Load .env file FIRST --- #
@@ -70,6 +71,7 @@ handler = logging.StreamHandler()
 handler.setFormatter(ColoredFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
+# logger.setLevel(logging.DEBUG)
 
 # Reduce noise from other libraries
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -130,15 +132,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def process_user_messages(user_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Processes buffered messages for a user after a delay. Sends the response directly without placeholder."""
     user_data = context.user_data.get(user_id)
-    
+
     if not user_data:
         logger.warning(f"User data not found for user {user_id} in process_user_messages. Aborting.")
         return
 
     current_task_object = asyncio.current_task()
+    t_proc = datetime.now()  # Start timing for processing
 
     try:
-        await asyncio.sleep(random.uniform(3, 5)) # Wait for 3-5 seconds
+        sleep_time = random.uniform(3, 5)
+        logger.debug(f"⏱️ Sleeping for {sleep_time:.2f}s before processing")
+        await asyncio.sleep(sleep_time)
+        logger.debug(f"⏱️ After sleep: +{(datetime.now() - t_proc).total_seconds():.2f}s")
 
         # Make a copy of messages to process and then clear the buffer for this user
         # This ensures new messages arriving during agent processing aren't included in *this* turn.
@@ -184,9 +190,11 @@ async def process_user_messages(user_id: str, context: ContextTypes.DEFAULT_TYPE
         bot_in_config = graph_config["configurable"].get("telegram_bot")
         logger.info(f"🔧 GRAPH INPUT: telegram_context={bool(telegram_ctx)}, bot_in_config={bool(bot_in_config)}, chat_id={telegram_ctx.get('chat_id')}, message_id={telegram_ctx.get('message_id')}")
         logger.info(f"🔧 NEW MESSAGES COUNT: {len(new_human_messages)}")
-        
+        logger.debug(f"⏱️ Before graph invoke: +{(datetime.now() - t_proc).total_seconds():.2f}s")
+
         # Execute the graph and get the final state
         final_state = await companion_agent_graph.ainvoke(current_turn_input, config=graph_config)
+        logger.debug(f"⏱️ After graph invoke: +{(datetime.now() - t_proc).total_seconds():.2f}s")
         
         # Extract the AI message from the final state
         ai_messages = [msg for msg in final_state.get("messages", []) if isinstance(msg, AIMessage)]
@@ -237,9 +245,8 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     logger.info(f"{Colors.CYAN}📸 PHOTO MESSAGE{Colors.RESET} [{user_id}]: {Colors.BOLD}{update.message.caption or 'No caption'}{Colors.RESET}")
 
-    # Track user activity and reset ignore count
+    # Track user activity (reset_ignored_count disabled - proactive messaging off)
     conversation_tracker.update_user_activity(user_id)
-    await scheduler_agent.reset_ignored_count(user_id)
 
     if user_id not in context.user_data: # Ensure user_data initialized
         context.user_data[user_id] = {'buffer': [], 'active_task': None, 'chat_id': chat_id}
@@ -336,11 +343,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = update.effective_chat.id
 
     logger.info(f"{Colors.BLUE}📨 USER MESSAGE{Colors.RESET} [{user_id}]: {Colors.BOLD}{user_message_text}{Colors.RESET}")
+    t0 = datetime.now()  # Start timing
 
-    # Track user activity and reset ignore count
+    # Track user activity (reset_ignored_count disabled - proactive messaging off)
     conversation_tracker.update_user_activity(user_id)
-    await scheduler_agent.reset_ignored_count(user_id)
-    
+    logger.debug(f"⏱️ After conversation_tracker: +{(datetime.now() - t0).total_seconds():.2f}s")
+
     # Initialize user data if needed
     if user_id not in context.user_data:
         context.user_data[user_id] = {'buffer': [], 'active_task': None, 'chat_id': chat_id}
@@ -409,27 +417,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text("I had trouble with that location. Could you try a major city name?")
             return
     
-    # Handle timezone validation if user didn't go through onboarding
-    background_scheduler = context.application.bot_data.get('background_scheduler')
-    if background_scheduler:
-        # Check if user has a timezone stored. If not, maybe the message is the timezone.
-        if not await scheduler_agent.get_user_timezone(user_id):
-            try:
-                import pytz
-                pytz.timezone(user_message_text)
-                await scheduler_agent.save_user_timezone(user_id, user_message_text)
-                await update.message.reply_text(f"Great, I've set your timezone to {user_message_text}. Thanks!")
-                # Don't process this message as a regular chat message
-                return
-            except pytz.UnknownTimeZoneError:
-                # It's not a valid timezone, so process as a regular message
-                pass
-        
-        background_scheduler.register_user(user_id, chat_id)
-
     # Regular message processing continues below
+    # Note: Timezone detection handled naturally by agent via tools when contextually relevant
+    logger.debug(f"⏱️ After onboarding checks: +{(datetime.now() - t0).total_seconds():.2f}s")
+
     user_data['last_message_id'] = update.message.message_id  # Store message ID for reactions
     user_data['buffer'].append(user_message_text)
+    logger.debug(f"⏱️ After buffer append: +{(datetime.now() - t0).total_seconds():.2f}s")
 
     # If there's an existing task, cancel it.
     active_task = user_data.get('active_task')
@@ -459,6 +453,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         new_task.add_done_callback(lambda t: _task_done_callback(t, user_id))
         logger.debug(f"⏰ Scheduled processing task for user {user_id}")
+        logger.debug(f"⏱️ After task creation: +{(datetime.now() - t0).total_seconds():.2f}s")
 
     except Exception as e:
         logger.error(f"Error initiating message processing for user {user_id}: {e}", exc_info=True)

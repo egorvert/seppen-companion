@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
 import logging
@@ -44,6 +45,16 @@ llm = ChatOpenAI(model="gpt-4.1", api_key=OPENAI_API_KEY, temperature=0.7)
 llm_with_tools = llm.bind_tools(ALL_TOOLS)
 structured_llm = llm.with_structured_output(AgentResponse)  # Note: no tools on structured LLM
 mem0 = MemoryClient(api_key=MEM0_API_KEY)
+
+# Helper function for background conversation storage
+async def _store_conversation_background(user_id: str, messages: List[Dict[str, str]]):
+    """Store conversation to Mem0 in background without blocking response."""
+    try:
+        # Run synchronous mem0.add in thread to avoid blocking event loop
+        await asyncio.to_thread(mem0.add, messages=messages, user_id=user_id)
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Background conversation storage failed for user {user_id}: {e}")
 
 # Use Dict[str, Any] for state type to avoid circular imports with graph.py
 # The actual State validation happens at runtime by LangGraph
@@ -146,10 +157,12 @@ def format_system_prompt_text(personality: Dict[str, Any], memories_context: str
         f"You can optionally add emoji reactions to the user's messages. This is a way to acknowledge or respond to their message emotionally without sending text. "
         f"You should decide whether to add a reaction based on your personality and the context of the message. "
         f"Available reactions: {reactions_list}\n"
-        f"VERY IMPORTANT: Use reactions SPARINGLY and only for significant emotional moments. Do not react to every message. Over-using reactions makes them feel cheap and unnatural. "
+        f"VERY IMPORTANT: Use reactions whenever it feels appropriate. You can also use reactions to express how engaged you are in a conversation or if you relate to something the user says. "
+        f"Do not react to every message. Over-using reactions makes them feel cheap and unnatural."
         f"A good time to react is when the user expresses a strong emotion (joy, sadness, surprise), shares something personal, or when you want to strongly agree or disagree. "
-        f"You can use the heart emoji to react to messages you agree with or to 'like' a message the user sends. "
-        f"You can also use the sob emoji to react to messages you find extremely funny or ironic. "
+        f"You can use the heart emoji (❤️) to react to messages you agree with or to 'like' a message the user sends. "
+        f"You can also use the sob emoji (😭) to react to messages you find extremely funny or ironic. "
+        f"You can use the tear emoji (😢) to react to genuinely sad messages."
         f"You can react to express agreement, disagreement, amusement, concern, celebration, or any other appropriate emotional response. "
     )
     return full_prompt
@@ -319,7 +332,7 @@ async def chat_agent_node(state: Dict[str, Any], config: Optional[RunnableConfig
     # Create the AI message from the structured response
     response_ai_message = AIMessage(content=agent_response.message)
 
-    # 5. Store the interaction in Mem0
+    # 5. Store the interaction in Mem0 (asynchronously to not block response)
     # Ensure messages[-1] is indeed the user message that prompted this response.
     if messages and isinstance(messages[-1], HumanMessage):
         # Use proper role-based format for mem0
@@ -327,7 +340,8 @@ async def chat_agent_node(state: Dict[str, Any], config: Optional[RunnableConfig
             {"role": "user", "content": user_message_for_log},
             {"role": "assistant", "content": agent_response.message}
         ]
-        mem0.add(messages=messages_to_store, user_id=user_id) # Using role-based message format
+        # Store asynchronously - don't block response delivery to user
+        asyncio.create_task(_store_conversation_background(user_id, messages_to_store))
 
     # 6. Return updated state with LLM's reaction decision
     # CRITICAL: Explicitly preserve the telegram_context from the input state

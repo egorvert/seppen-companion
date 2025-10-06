@@ -7,6 +7,7 @@ and executing the reaction tool.
 import logging
 from typing import Dict, List, Any, Optional
 from langchain_core.messages import HumanMessage, BaseMessage
+from langchain_core.runnables import RunnableConfig
 
 from .tools import ReactionTool
 
@@ -49,7 +50,7 @@ def should_add_reaction(state: Dict[str, Any]) -> str:
             logger.debug("🚫 LLM decided not to add a reaction")
         return "end"
 
-async def add_reaction_node(state: Dict[str, Any], config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def add_reaction_node(state: Dict[str, Any], config: Optional[RunnableConfig] = None) -> Dict[str, Any]:
     """
     Add a reaction to the user's message using the LLM's chosen reaction.
     
