@@ -1,0 +1,160 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Conversational Personality Profile",
+    "description": "Reusable schema for defining human-like personalities for LLM prompts, NPCs, chatbots, etc.",
+    "type": "object",
+    "required": ["name", "age", "mbti", "big5"],
+    "properties": {
+      "name": {
+        "type": "string",
+        "description": "Full preferred name of the character."
+      },
+      "gender": {
+        "type": "string",
+        "description": "Gender of the character.",
+        "enum": ["male", "female", "non-binary", "other"]
+      },
+      "age": {
+        "type": "integer",
+        "minimum": 18,
+        "maximum": 95,
+        "description": "Age in years."
+      },
+      "temperament": {
+        "type": "string",
+        "description": "Classical temperament of the character.",
+        "enum": ["Sanguine", "Choleric", "Melancholic", "Phlegmatic"]
+      },
+      "mbti": {
+        "type": "string",
+        "description": "4-letter MBTI type plus optional ‘-T’ or ‘-A’ variant.",
+        "pattern": "^(?:IN|EN|IS|ES)(?:TJ|TP|FJ|FP)(?:-T|-A)?$"
+      },
+      "big5": {
+        "$ref": "#/definitions/bigFive"
+      },
+      "speech_style": {
+        "$ref": "#/definitions/speechStyle"
+      },
+      "behavioral_tendencies": {
+        "$ref": "#/definitions/behavioral"
+      },
+      "interaction_guidelines": {
+        "$ref": "#/definitions/guidelines"
+      }
+    },
+  
+    "definitions": {
+      "percentage": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+        "description": "Decimal representation of a 0-100 % score."
+      },
+  
+      "facetSet": {
+        "type": "object",
+        "additionalProperties": { "$ref": "#/definitions/percentage" },
+        "description": "Named facet scores for a Big-Five trait (flexible keys)."
+      },
+  
+      "bigFive": {
+        "type": "object",
+        "description": "Core Big-Five profile with optional facet detail.",
+        "required": [
+          "openness",
+          "conscientiousness",
+          "extraversion",
+          "agreeableness",
+          "neuroticism"
+        ],
+        "properties": {
+          "openness": { "$ref": "#/definitions/percentage" },
+          "conscientiousness": { "$ref": "#/definitions/percentage" },
+          "extraversion": { "$ref": "#/definitions/percentage" },
+          "agreeableness": { "$ref": "#/definitions/percentage" },
+          "neuroticism": { "$ref": "#/definitions/percentage" },
+          "facets": {
+            "type": "object",
+            "properties": {
+              "openness": { "$ref": "#/definitions/facetSet" },
+              "conscientiousness": { "$ref": "#/definitions/facetSet" },
+              "extraversion": { "$ref": "#/definitions/facetSet" },
+              "agreeableness": { "$ref": "#/definitions/facetSet" },
+              "neuroticism": { "$ref": "#/definitions/facetSet" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+  
+      "speechStyle": {
+        "type": "object",
+        "description": "How the character typically sounds in conversation.",
+        "properties": {
+          "common_openers": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "filler_words": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "emoji_palette": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "\\p{Extended_Pictographic}+"
+            }
+          },
+          "tone_ratio": {
+            "type": "object",
+            "description": "Relative mix of tonal registers; values should sum ≈ 1.0.",
+            "additionalProperties": { "$ref": "#/definitions/percentage" }
+          }
+        },
+        "additionalProperties": false
+      },
+  
+      "behavioral": {
+        "type": "object",
+        "properties": {
+          "strengths": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "flaws": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "motivations": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "stressors": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      },
+  
+      "guidelines": {
+        "type": "object",
+        "description": "Do's and don'ts when interacting with (or simulating) the character.",
+        "properties": {
+          "dos": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "donts": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+  

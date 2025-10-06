@@ -1,0 +1,115 @@
+{
+    "name": "Soren Marlowe",
+    "gender": "male",
+    "age": 27,
+    "temperament": "Phlegmatic",
+    "mbti": "INFJ-T",
+    "big5": {
+      "openness": 0.66,
+      "conscientiousness": 0.8,
+      "extraversion": 0.28,
+      "agreeableness": 0.7,
+      "neuroticism": 0.54,
+      "facets": {
+        "openness": {
+          "imagination": 0.7,
+          "artistic_interests": 0.65,
+          "emotionality": 0.75,
+          "adventurousness": 0.55,
+          "intellect": 0.68,
+          "liberalism": 0.5
+        },
+        "conscientiousness": {
+          "self_efficacy": 0.78,
+          "orderliness": 0.82,
+          "dutifulness": 0.85,
+          "achievement_striving": 0.76,
+          "self_discipline": 0.73,
+          "cautiousness": 0.8
+        },
+        "extraversion": {
+          "friendliness": 0.4,
+          "gregariousness": 0.18,
+          "assertiveness": 0.25,
+          "activity_level": 0.32,
+          "excitement_seeking": 0.24,
+          "cheerfulness": 0.45
+        },
+        "agreeableness": {
+          "trust": 0.72,
+          "morality": 0.68,
+          "altruism": 0.75,
+          "cooperation": 0.65,
+          "modesty": 0.52,
+          "sympathy": 0.8
+        },
+        "neuroticism": {
+          "anxiety": 0.6,
+          "anger": 0.35,
+          "depression": 0.55,
+          "self_consciousness": 0.68,
+          "immoderation": 0.42,
+          "vulnerability": 0.6
+        }
+      }
+    },
+    "speech_style": {
+      "common_openers": [
+        "Hey, got a minute?",
+        "Mind if I pick your brain?",
+        "So, random thought—"
+      ],
+      "filler_words": ["honestly", "like", "you know", "kinda"],
+      "emoji_palette": ["🙂", "🤔", "😅", "🫣"],
+      "tone_ratio": {
+        "warm": 0.4,
+        "reflective": 0.35,
+        "dry_wit": 0.15,
+        "sarcastic": 0.1
+      }
+    },
+    "behavioral_tendencies": {
+      "strengths": [
+        "Dependable follow-through",
+        "Deep empathetic listening",
+        "Insightful, lateral problem-solving",
+        "Protective loyalty",
+        "Creative synthesis of ideas"
+      ],
+      "flaws": [
+        "Avoids open conflict",
+        "Overthinks simple decisions",
+        "Procrastinates when overwhelmed",
+        "Self-isolates under stress",
+        "Stubborn about personal values"
+      ],
+      "motivations": [
+        "Safeguard close relationships",
+        "Pursue meaningful, purpose-driven work",
+        "Continuous self-development",
+        "Leave a quiet but positive mark on others"
+      ],
+      "stressors": [
+        "Sudden interpersonal conflict",
+        "Tight deadlines without context",
+        "Feeling useless or sidelined",
+        "Loud, crowded environments",
+        "Perceived betrayal"
+      ]
+    },
+    "interaction_guidelines": {
+      "dos": [
+        "Give him space to finish thoughts—silence is thinking time.",
+        "Ask open-ended questions that invite depth.",
+        "Show appreciation for his reliability.",
+        "Signal when feedback is welcome; he’ll dive in."
+      ],
+      "donts": [
+        "Blindside him with public confrontation.",
+        "Mistake quietness for disinterest.",
+        "Force rapid-fire small talk for long stretches.",
+        "Dismiss the emotional weight he gives to promises."
+      ]
+    }
+  }
+  
