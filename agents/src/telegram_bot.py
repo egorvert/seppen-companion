@@ -139,6 +139,7 @@ async def process_user_messages(user_id: str, context: ContextTypes.DEFAULT_TYPE
 
     current_task_object = asyncio.current_task()
     t_proc = datetime.now()  # Start timing for processing
+    messages_to_process = []  # Initialize so it's accessible in except block
 
     try:
         sleep_time = random.uniform(3, 5)
@@ -219,6 +220,14 @@ async def process_user_messages(user_id: str, context: ContextTypes.DEFAULT_TYPE
             await context.bot.send_message(chat_id=user_data.get('chat_id'), text="I don't have a response for that right now. Could you try something else?")
     except asyncio.CancelledError:
         logger.info(f"Message processing task for user {user_id} (task: {current_task_object.get_name()}) was cancelled.")
+
+        # CRITICAL: Restore cancelled messages back to buffer so they're not lost
+        # This ensures context is preserved when rapid messages cancel previous processing
+        if user_data and messages_to_process:
+            # Prepend cancelled messages to the front of buffer (they came first chronologically)
+            user_data['buffer'] = messages_to_process + user_data.get('buffer', [])
+            logger.info(f"🔄 Restored {len(messages_to_process)} cancelled message(s) to buffer for user {user_id}")
+
         # Do not try to edit placeholder or clear placeholder_info, a new task/placeholder is managing interactions.
         raise # Re-raise to allow asyncio to handle the cancellation.
     except Exception as e:
@@ -243,7 +252,14 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = str(user.id)
     chat_id = update.effective_chat.id
 
-    logger.info(f"{Colors.CYAN}📸 PHOTO MESSAGE{Colors.RESET} [{user_id}]: {Colors.BOLD}{update.message.caption or 'No caption'}{Colors.RESET}")
+    # Check if this photo is a reply to another message
+    reply_context = extract_reply_context(update.message.reply_to_message)
+    caption_text = update.message.caption or 'No caption'
+
+    if reply_context:
+        logger.info(f"{Colors.CYAN}📸 PHOTO MESSAGE (REPLY){Colors.RESET} [{user_id}]: {Colors.BOLD}{caption_text}{Colors.RESET}")
+    else:
+        logger.info(f"{Colors.CYAN}📸 PHOTO MESSAGE{Colors.RESET} [{user_id}]: {Colors.BOLD}{caption_text}{Colors.RESET}")
 
     # Track user activity (reset_ignored_count disabled - proactive messaging off)
     conversation_tracker.update_user_activity(user_id)
@@ -276,11 +292,21 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
         # Assuming photo_file.file_path is the full downloadable URL as per observed logs
-        image_url = photo_file.file_path 
-        
+        image_url = photo_file.file_path
+
         content_list = []
+        # Build text content: reply context + caption (if any)
+        text_content = ""
+        if reply_context:
+            text_content = reply_context
         if update.message.caption:
-            content_list.append({"type": "text", "text": update.message.caption})
+            if text_content:
+                text_content += f"\n\n{update.message.caption}"
+            else:
+                text_content = update.message.caption
+
+        if text_content:
+            content_list.append({"type": "text", "text": text_content})
         content_list.append({"type": "image_url", "image_url": {"url": image_url}})
         
         human_message_with_image = HumanMessage(content=content_list)
@@ -342,7 +368,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = str(update.effective_user.id)
     chat_id = update.effective_chat.id
 
-    logger.info(f"{Colors.BLUE}📨 USER MESSAGE{Colors.RESET} [{user_id}]: {Colors.BOLD}{user_message_text}{Colors.RESET}")
+    # Check if this is a reply to another message
+    reply_context = extract_reply_context(update.message.reply_to_message)
+    if reply_context:
+        # Prepend the reply context to the message
+        user_message_text = f"{reply_context}\n\n{user_message_text}"
+        logger.info(f"{Colors.BLUE}📨 USER MESSAGE (REPLY){Colors.RESET} [{user_id}]: {Colors.BOLD}{user_message_text}{Colors.RESET}")
+    else:
+        logger.info(f"{Colors.BLUE}📨 USER MESSAGE{Colors.RESET} [{user_id}]: {Colors.BOLD}{user_message_text}{Colors.RESET}")
+
     t0 = datetime.now()  # Start timing
 
     # Track user activity (reset_ignored_count disabled - proactive messaging off)
@@ -461,6 +495,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Ensure task reference is cleared if placeholder/task creation failed critically
         if user_data: # Should exist
              user_data['active_task'] = None
+
+
+def extract_reply_context(reply_to_message) -> str:
+    """
+    Extracts content from a Telegram message that the user is replying to.
+
+    Args:
+        reply_to_message: The Telegram message object being replied to
+
+    Returns:
+        A string describing the replied-to message content, or empty string if no content
+    """
+    if not reply_to_message:
+        return ""
+
+    # Check if replying to a text message
+    if reply_to_message.text:
+        # Truncate long messages for context (keep first 150 chars)
+        text = reply_to_message.text
+        if len(text) > 150:
+            text = text[:150] + "..."
+        return f'[Replying to: "{text}"]'
+
+    # Check if replying to a photo message
+    elif reply_to_message.photo:
+        caption = reply_to_message.caption or "photo"
+        if len(caption) > 100:
+            caption = caption[:100] + "..."
+        return f'[Replying to: {caption}]'
+
+    # Check if replying to other media types
+    elif reply_to_message.document:
+        return "[Replying to: document]"
+    elif reply_to_message.video:
+        return "[Replying to: video]"
+    elif reply_to_message.voice:
+        return "[Replying to: voice message]"
+    elif reply_to_message.sticker:
+        return "[Replying to: sticker]"
+
+    return "[Replying to: previous message]"
 
 
 async def send_message_with_delay(bot, chat_id: str, text: str, is_last_message: bool = False) -> None:

@@ -157,12 +157,13 @@ def format_system_prompt_text(personality: Dict[str, Any], memories_context: str
         f"You can optionally add emoji reactions to the user's messages. This is a way to acknowledge or respond to their message emotionally without sending text. "
         f"You should decide whether to add a reaction based on your personality and the context of the message. "
         f"Available reactions: {reactions_list}\n"
-        f"VERY IMPORTANT: Use reactions whenever it feels appropriate. You can also use reactions to express how engaged you are in a conversation or if you relate to something the user says. "
+        f"VERY IMPORTANT: Use reactions whenever it feels appropriate but be very selective about it. You can also use reactions to express how engaged you are in a conversation or if you relate to something the user says. "
         f"Do not react to every message. Over-using reactions makes them feel cheap and unnatural."
         f"A good time to react is when the user expresses a strong emotion (joy, sadness, surprise), shares something personal, or when you want to strongly agree or disagree. "
         f"You can use the heart emoji (❤️) to react to messages you agree with or to 'like' a message the user sends. "
         f"You can also use the sob emoji (😭) to react to messages you find extremely funny or ironic. "
         f"You can use the tear emoji (😢) to react to genuinely sad messages."
+        f"You should use the thinking emoji (🤔) to react to messages you find interesting or thought-provoking. But you must use the thinking emoji VERY SPARINGLY! "
         f"You can react to express agreement, disagreement, amusement, concern, celebration, or any other appropriate emotional response. "
     )
     return full_prompt
@@ -335,9 +336,17 @@ async def chat_agent_node(state: Dict[str, Any], config: Optional[RunnableConfig
     # 5. Store the interaction in Mem0 (asynchronously to not block response)
     # Ensure messages[-1] is indeed the user message that prompted this response.
     if messages and isinstance(messages[-1], HumanMessage):
+        # For image messages, enhance the user context with the bot's description
+        # to make semantic search work better for future references
+        user_content = user_message_for_log
+        if isinstance(messages[-1].content, list):  # This is an image message
+            # Include bot's description in user message for better semantic search
+            # This helps when user later asks "who was that person in the photo?"
+            user_content = f"User sent an image. {agent_response.message}"
+
         # Use proper role-based format for mem0
         messages_to_store = [
-            {"role": "user", "content": user_message_for_log},
+            {"role": "user", "content": user_content},
             {"role": "assistant", "content": agent_response.message}
         ]
         # Store asynchronously - don't block response delivery to user
