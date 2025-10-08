@@ -29,6 +29,11 @@ You will also need to create a bot using BotFather inside telegram and obtain th
 
 https://core.telegram.org/bots/tutorial#obtain-your-bot-token
 
+### Creating a personality for your bot
+You can create a custom personality following the json schema using the following tool (for free): https://seppen.ai/hiro/createpersonalityfictional-1
+
+Copy the JSON output and put it in a new file in agents/personalities
+
 ## Running the bot
 To start the bot, simply run the telegram_bot.py file (make sure you have your virtual environment active)
 ```
